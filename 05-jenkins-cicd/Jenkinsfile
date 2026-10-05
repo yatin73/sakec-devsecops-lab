@@ -1,0 +1,54 @@
+// Declarative Jenkins pipeline for the SAKEC DevSecOps sample app.
+// Checkout -> Docker build -> (Day 6) scan -> redeploy container on the same EC2 host.
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "sakec-devsecops-app"
+        IMAGE_TAG  = "${env.BUILD_NUMBER}"
+        CONTAINER_NAME = "devsecops-app"
+        APP_DIR = "03-sample-app-deployment-ec2/app"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -t ${IMAGE_NAME}:latest ."
+                }
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                // See 06-devsecops-security/README.md to wire up Trivy here.
+                sh "echo 'TODO: trivy image ${IMAGE_NAME}:${IMAGE_TAG} -- see 06-devsecops-security'"
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh """
+                    docker stop ${CONTAINER_NAME} || true
+                    docker rm ${CONTAINER_NAME} || true
+                    docker run -d --name ${CONTAINER_NAME} -p 5000:5000 ${IMAGE_NAME}:latest
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployed ${IMAGE_NAME}:${IMAGE_TAG} successfully."
+        }
+        failure {
+            echo "Pipeline failed - check stage logs above."
+        }
+    }
+}
