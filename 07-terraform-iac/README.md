@@ -2,7 +2,9 @@
 
 **Day 7 of the lab.** Goal: provision the same infrastructure students built by hand on Day 1 (VPC, Subnet, Internet Gateway, Security Group, EC2 instance) using Terraform — then destroy and recreate it in seconds.
 
-## 1. Install Terraform
+> **Run everything in this module from your own laptop, not from inside EC2.** Terraform's job here is to *create* the EC2 instance, so it needs to run from a separate control machine against the AWS API — your laptop is that control machine. You'll watch the AWS Console update in real time as `terraform apply` runs, which is also just a better teaching moment than doing it blind over SSH. (Already installed as part of [`00-prerequisites`](../00-prerequisites/README.md) — recap below.)
+
+## 1. Install Terraform (on your laptop)
 
 Official guide: https://developer.hashicorp.com/terraform/install
 
@@ -12,11 +14,11 @@ Official guide: https://developer.hashicorp.com/terraform/install
   local$ brew tap hashicorp/tap
   local$ brew install hashicorp/tap/terraform
   ```
-- **Linux / Ubuntu EC2:**
+- **Linux:**
   ```bash
-  ec2$ wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-  ec2$ echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-  ec2$ sudo apt update && sudo apt install terraform -y
+  local$ wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  local$ echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+  local$ sudo apt update && sudo apt install terraform -y
   ```
 
 Verify:
@@ -93,3 +95,7 @@ Everything created — VPC, subnet, IGW, route table, SG, EC2 — is removed in 
 ## 8. Micro-project tie-in
 
 Experiment 10 (syllabus) wants Terraform provisioning infra on GCP/AWS/Azure as part of the end-to-end DevOps workflow. This lab fixes on **AWS** throughout for consistency — see [`08-end-to-end-domain-dns/`](../08-end-to-end-domain-dns/) where this same Terraform config becomes the first stage of the full pipeline.
+
+## Note for Day 8: installing Terraform on EC2 too (optional)
+
+Day 7 itself never needs Terraform on EC2. If, in Day 8, you want **Jenkins** (which runs on EC2) to also trigger `terraform apply` as a pipeline stage (e.g. to manage extra resources after the base infra exists), install Terraform on the EC2 instance the same way as the Linux steps above, then give the `jenkins` user AWS credentials (an IAM access key as an environment variable or Jenkins credential, same as [`00-prerequisites`](../00-prerequisites/README.md) step 6). This is an advanced/bonus extension, not required for the core 8-day flow.

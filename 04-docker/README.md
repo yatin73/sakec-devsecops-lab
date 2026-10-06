@@ -13,9 +13,29 @@ Official overview: https://docs.docker.com/get-started/docker-overview/
 - **Registry** (e.g., Docker Hub) — where images are stored/shared.
 - **Dockerfile** — instructions to build an image.
 
+# 04 — Docker
+
+**Day 4 of the lab.** Goal: containerize the sample app from Day 3. Taught in two parts: **Part A** on each student's own laptop using **Docker Desktop's GUI** (so "image," "container," "volume" are things you can literally click on and see), then **Part B** repeating the exact same `docker build`/`docker run` commands headless over SSH on the Ubuntu EC2 instance.
+
+## 1. Docker architecture (concepts to teach first)
+
+Official overview: https://docs.docker.com/get-started/docker-overview/
+
+- **Docker Engine / daemon (`dockerd`)** — background service that builds/runs containers.
+- **Docker CLI (`docker`)** — the command students type.
+- **Image** — a read-only template (built from a `Dockerfile`).
+- **Container** — a running instance of an image.
+- **Registry** (e.g., Docker Hub) — where images are stored/shared.
+- **Dockerfile** — instructions to build an image.
+
 ## 2. Install Docker
 
-### Ubuntu / EC2 (where the live demo runs)
+Already done as part of [`00-prerequisites/README.md`](../00-prerequisites/README.md) (Docker Desktop on Windows/macOS, Docker Engine on Linux). Quick recap:
+
+### Windows / macOS — Docker Desktop
+Official guides: https://docs.docker.com/desktop/install/windows-install/ and https://docs.docker.com/desktop/install/mac-install/
+
+### Ubuntu / EC2 — Docker Engine (CLI only, no GUI)
 
 Official guide: https://docs.docker.com/engine/install/ubuntu/
 
@@ -43,14 +63,6 @@ ec2$ newgrp docker          # or log out/in again
 ec2$ docker run hello-world
 ```
 
-### macOS (for local practice)
-
-Official guide: https://docs.docker.com/desktop/install/mac-install/ — download **Docker Desktop** (choose Apple Silicon or Intel chip build) and drag to Applications.
-
-### Windows (for local practice)
-
-Official guide: https://docs.docker.com/desktop/install/windows-install/ — download **Docker Desktop for Windows**. Requires WSL2 (the installer will prompt/enable it).
-
 Verify on any OS:
 ```bash
 docker --version
@@ -75,7 +87,24 @@ CMD ["python3", "app.py"]
 
 Dockerfile instruction reference: https://docs.docker.com/reference/dockerfile/
 
-## 4. Build and run
+## Part A — Build and run locally, using Docker Desktop's GUI
+
+```bash
+local$ git clone https://github.com/<your-username>/sakec-devsecops-lab.git
+local$ cd sakec-devsecops-lab/03-sample-app-deployment-ec2/app
+local$ docker build -t sakec-devsecops-app:v1 .
+local$ docker run -d --name devsecops-app -p 5000:5000 sakec-devsecops-app:v1
+```
+
+Now open **Docker Desktop** and tour the GUI before moving to EC2:
+
+- **Images** tab → see `sakec-devsecops-app:v1` listed, its size, and the layers it's built from.
+- **Containers** tab → see `devsecops-app` running, click it to view live logs, open a terminal inside it, or stop/start it with one click.
+- **Volumes** tab (if any are added later) → where persisted data would show up.
+
+Visit `http://localhost:5000` in your browser — same app as Day 3, now containerized, running entirely on your laptop.
+
+## Part B — Repeat headless on EC2 (no GUI, CLI only)
 
 ```bash
 ec2$ cd sakec-devsecops-lab/03-sample-app-deployment-ec2/app
@@ -83,13 +112,13 @@ ec2$ docker build -t sakec-devsecops-app:v1 .
 ec2$ docker run -d --name devsecops-app -p 5000:5000 sakec-devsecops-app:v1
 ```
 
-Check it's running:
+Check it's running (this is the CLI equivalent of the Docker Desktop "Containers" tab):
 ```bash
 ec2$ docker ps
 ec2$ docker logs devsecops-app
 ```
 
-Visit `http://<EC2_PUBLIC_IP>:5000` — same app as Day 3, now containerized.
+Visit `http://<EC2_PUBLIC_IP>:5000` — same image, same behavior, no GUI needed because the commands are identical to Part A.
 
 ## 5. Useful day-to-day Docker commands
 
@@ -110,23 +139,23 @@ Visit `http://<EC2_PUBLIC_IP>:5000` — same app as Day 3, now containerized.
 Official guide: https://docs.docker.com/docker-hub/repos/create/
 
 ```bash
-ec2$ docker login
-ec2$ docker tag sakec-devsecops-app:v1 <dockerhub-username>/sakec-devsecops-app:v1
-ec2$ docker push <dockerhub-username>/sakec-devsecops-app:v1
+docker login
+docker tag sakec-devsecops-app:v1 <dockerhub-username>/sakec-devsecops-app:v1
+docker push <dockerhub-username>/sakec-devsecops-app:v1
 ```
 
-This is the image Jenkins will build/push/deploy automatically starting Day 5.
+Run this once, from either your laptop or EC2 — this is the image Jenkins will build/push/deploy automatically starting Day 5.
 
 ## 7. Experiment (syllabus): run across different environments
 
-Pull and run the same image on a different machine/OS to demonstrate portability:
+Pull and run the same image on a different machine/OS to demonstrate portability — e.g. pull on EC2 the image you just built and pushed from your laptop (or vice versa):
 
 ```bash
 docker pull <dockerhub-username>/sakec-devsecops-app:v1
 docker run -d -p 8000:5000 <dockerhub-username>/sakec-devsecops-app:v1
 ```
 
-Same image, same behavior — regardless of host OS, as long as Docker is installed.
+Same image, same behavior — regardless of host OS, laptop or cloud, GUI or headless, as long as Docker is installed.
 
 ## Common issues
 
