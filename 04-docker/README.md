@@ -157,8 +157,105 @@ docker run -d -p 8000:5000 <dockerhub-username>/sakec-devsecops-app:v1
 
 Same image, same behavior — regardless of host OS, laptop or cloud, GUI or headless, as long as Docker is installed.
 
+## 8. Scan the image with Trivy (vulnerability scanning)
+
+Trivy scans an image's OS packages and app dependencies for known CVEs. Full comparison with Snyk and Jenkins wiring: [`../06-devsecops-security/image-scanning-trivy-snyk.md`](../06-devsecops-security/image-scanning-trivy-snyk.md). Official docs: https://aquasecurity.github.io/trivy/latest/getting-started/installation/
+
+### Install Trivy
+
+```bash
+# Ubuntu / EC2
+ec2$ sudo apt-get install wget gnupg -y
+ec2$ wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+ec2$ echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+ec2$ sudo apt-get update
+ec2$ sudo apt-get install trivy -y
+
+# macOS
+local$ brew install trivy
+```
+
+Verify:
+```bash
+trivy --version
+```
+
+### Run a scan against the image built in Part A/B
+
+```bash
+ec2$ trivy image sakec-devsecops-app:v1
+```
+
+You'll see a table of CVEs grouped by severity (`UNKNOWN`/`LOW`/`MEDIUM`/`HIGH`/`CRITICAL`) per OS package and language dependency found in the image.
+
+### Demonstrate a CI-style gate (fail the build on serious issues)
+
+```bash
+ec2$ trivy image --severity HIGH,CRITICAL --exit-code 1 sakec-devsecops-app:v1
+echo $?   # 1 means Trivy found HIGH/CRITICAL CVEs and the "build" should fail
+```
+
+Compare against an ignore-everything run to show the difference:
+```bash
+ec2$ trivy image --severity LOW,MEDIUM --exit-code 0 sakec-devsecops-app:v1
+```
+
+### Run Trivy without installing it (as a container)
+
+Useful to show students a tool doesn't always need a host install:
+```bash
+ec2$ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image sakec-devsecops-app:v1
+```
+
+This is the exact command Jenkins will run as a pipeline stage starting Day 5.
+
+## 9. Static code analysis with SonarQube
+
+SonarQube finds bugs, code smells, and security hotspots in source code (not the built image). Full Jenkins Quality Gate wiring: [`../06-devsecops-security/sonarqube-sast.md`](../06-devsecops-security/sonarqube-sast.md). Official docs: https://docs.sonarsource.com/sonarqube-server/latest/
+
+### Run SonarQube server (as a container, easiest for the lab)
+
+```bash
+ec2$ docker run -d --name sonarqube -p 9000:9000 sonarqube:lts-community
+```
+
+Open port **9000** in the EC2 Security Group, then browse to `http://<EC2_PUBLIC_IP>:9000`. Default login `admin` / `admin` (you'll be forced to change it on first login).
+
+> If the container exits with a `vm.max_map_count` error, raise it on the host:
+> ```bash
+> ec2$ sudo sysctl -w vm.max_map_count=262144
+> ec2$ echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
+> ```
+
+### Install the SonarScanner CLI
+
+Download the scanner zip from the official page, unzip, and add `bin/` to `PATH`: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/
+
+```bash
+ec2$ sonar-scanner -v
+```
+
+### Generate a project token
+
+SonarQube UI → My Account → Security → **Generate Token** → copy it (used instead of a password for analysis).
+
+### Run the analysis against the sample app
+
+```bash
+ec2$ cd sakec-devsecops-lab/03-sample-app-deployment-ec2/app
+ec2$ sonar-scanner \
+  -Dsonar.projectKey=sakec-devsecops-app \
+  -Dsonar.sources=. \
+  -Dsonar.host.url=http://localhost:9000 \
+  -Dsonar.login=<your-token>
+```
+
+Open SonarQube UI → Projects → `sakec-devsecops-app` to show students the bugs/vulnerabilities/code smells dashboard and the **Quality Gate** pass/fail status.
+
 ## Common issues
 
 - **`permission denied` on `docker` commands:** user not in the `docker` group yet — re-run `usermod -aG docker $USER` and start a new shell session.
 - **`port is already allocated`:** another container/process already bound that host port — use a different `-p` mapping or `docker stop` the conflicting container.
 - **Docker Desktop won't start (Windows):** confirm WSL2 is enabled (`wsl --status`) and virtualization is on in BIOS.
+- **`trivy image` fails to pull vulnerability DB:** EC2 outbound internet access is required on first run (downloads the CVE database) — check Security Group egress rules.
+- **SonarQube container exits immediately:** almost always the `vm.max_map_count` kernel setting — see the fix above — check with `docker logs sonarqube`.
