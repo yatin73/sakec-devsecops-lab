@@ -246,28 +246,92 @@ SonarQube finds bugs, code smells, and security hotspots in source code (not the
 ec2$ docker run -d --name sonarqube -p 9000:9000 sonarqube:lts-community
 ```
 
-Open port **9000** in the EC2 Security Group, then browse to `http://<EC2_PUBLIC_IP>:9000`. Default login `admin` / `admin` (you'll be forced to change it on first login).
+Open port **9000** in the EC2 Security Group (or just browse `http://localhost:9000` if running on your own laptop), then wait for startup:
+```bash
+docker logs -f sonarqube
+```
+Wait for a log line like `SonarQube is operational` before opening the UI.
 
 > If the container exits with a `vm.max_map_count` error, raise it on the host:
 > ```bash
 > ec2$ sudo sysctl -w vm.max_map_count=262144
 > ec2$ echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
 > ```
+> On Docker Desktop (macOS/Windows) this is usually not needed; if it happens anyway, add `-e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true` to the `docker run` command (dev-only workaround).
 
-### Install the SonarScanner CLI
+### Log in and create a project
 
-Download the scanner zip from the official page, unzip, and add `bin/` to `PATH`: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/
+Browse to `http://<EC2_PUBLIC_IP>:9000` (or `http://localhost:9000`). Default login `admin` / `admin` (you'll be forced to change it on first login).
 
-```bash
-ec2$ sonar-scanner -v
-```
+- Projects → **Create Project** → **Manually**
+- Set a project display name and **project key** (e.g. `amazonclone`)
+- Choose **"Locally"** as the analysis method
 
 ### Generate a project token
 
-SonarQube UI → My Account → Security → **Generate Token** → copy it (used instead of a password for analysis).
+When prompted during project creation (or later via My Account → Security → **Generate Token**) → copy it immediately — it's shown only once, and is used instead of a password for analysis.
 
-### Run the analysis against the sample app
+### Install the SonarScanner CLI
 
+Official guide: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/
+
+**macOS (Homebrew):**
+```bash
+local$ brew install sonar-scanner
+```
+
+**Linux / Ubuntu / EC2 (manual zip install):**
+```bash
+ec2$ sudo apt install unzip -y
+ec2$ wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+ec2$ unzip sonar-scanner-cli-5.0.1.3006-linux.zip
+ec2$ sudo mv sonar-scanner-5.0.1.3006-linux /opt/sonar-scanner
+ec2$ echo 'export PATH=$PATH:/opt/sonar-scanner/bin' >> ~/.bashrc
+ec2$ source ~/.bashrc
+```
+
+**Windows (PowerShell):**
+1. Download the Windows zip from https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-windows.zip
+2. Extract it, e.g. to `C:\sonar-scanner`
+3. Add `C:\sonar-scanner\bin` to the **System PATH** environment variable (System Properties → Environment Variables → Path → New)
+4. Open a new PowerShell/CMD window so the PATH change takes effect
+
+Or via Chocolatey:
+```powershell
+local> choco install sonarscanner-msbuild-net46
+```
+
+Verify on any OS:
+```bash
+sonar-scanner -v
+```
+
+### Add a `sonar-project.properties` file to the project being scanned
+
+Place this in the root of the project you're analyzing (e.g. the `AmazonClone` repo) so you don't have to retype config every run:
+
+```properties
+sonar.projectKey=amazonclone
+sonar.projectName=AmazonClone
+sonar.sources=src
+sonar.exclusions=node_modules/**,dist/**,build/**,public/**
+sonar.sourceEncoding=UTF-8
+```
+
+- `sonar.projectKey` must match the key you created in the SonarQube UI — this is the only mandatory setting; everything else falls back to defaults if omitted.
+- `sonar.sources` defaults to the project root if not set — exclude `node_modules`/build output explicitly rather than relying on `.gitignore`-based auto-exclusion.
+- Never commit a token into this file — tokens are passed separately via `-Dsonar.login` on the command line (or `sonar.token` in newer scanner versions), not stored here.
+
+### Run the analysis
+
+```bash
+cd AmazonClone
+sonar-scanner \
+  -Dsonar.host.url=http://localhost:9000 \
+  -Dsonar.login=<your-token>
+```
+
+Or, against the lab's sample app (no properties file needed — pass everything via flags):
 ```bash
 ec2$ cd sakec-devsecops-lab/03-sample-app-deployment-ec2/app
 ec2$ sonar-scanner \
@@ -277,7 +341,9 @@ ec2$ sonar-scanner \
   -Dsonar.login=<your-token>
 ```
 
-Open SonarQube UI → Projects → `sakec-devsecops-app` to show students the bugs/vulnerabilities/code smells dashboard and the **Quality Gate** pass/fail status.
+### View results
+
+Open SonarQube UI → Projects → `<your-project-key>` to show students the bugs/vulnerabilities/code smells dashboard and the **Quality Gate** pass/fail status. Re-running `sonar-scanner` after further code changes shows a trend/diff against the previous analysis.
 
 ## Common issues
 
@@ -286,3 +352,4 @@ Open SonarQube UI → Projects → `sakec-devsecops-app` to show students the bu
 - **Docker Desktop won't start (Windows):** confirm WSL2 is enabled (`wsl --status`) and virtualization is on in BIOS.
 - **`trivy image` fails to pull vulnerability DB:** EC2 outbound internet access is required on first run (downloads the CVE database) — check Security Group egress rules.
 - **SonarQube container exits immediately:** almost always the `vm.max_map_count` kernel setting — see the fix above — check with `docker logs sonarqube`.
+- **`sonar-scanner` not found after install:** PATH wasn't updated in the current shell — open a new terminal window or re-source your shell profile.
