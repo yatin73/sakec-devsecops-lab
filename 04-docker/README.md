@@ -209,6 +209,33 @@ ec2$ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy 
 
 This is the exact command Jenkins will run as a pipeline stage starting Day 5.
 
+### Generate an HTML report
+
+Trivy's default output is a terminal table; for a shareable report, render it with the community HTML template.
+
+Download the template once (same folder you run scans from):
+```bash
+curl -fsSL -o html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+```
+
+Run the scan with `--format template`, pointing at the downloaded template, and write to a file with `-o`:
+```bash
+trivy image --format template --template "@html.tpl" -o report.html sakec-devsecops-app:v1
+```
+
+Open it:
+```bash
+open report.html        # macOS
+xdg-open report.html    # Linux desktop
+```
+
+Combine with severity filtering for a cleaner, gate-focused report:
+```bash
+trivy image --severity HIGH,CRITICAL --format template --template "@html.tpl" -o report.html sakec-devsecops-app:v1
+```
+
+> The report groups findings by **target** — e.g. `alpine` (OS packages from the base image) and `node-pkg`/`python-pkg` (app dependencies) — as separate sections, so don't expect every row to match your `package.json`/`requirements.txt` exactly; it also includes transitive (indirect) dependencies pulled in by your direct ones.
+
 ## 9. Static code analysis with SonarQube
 
 SonarQube finds bugs, code smells, and security hotspots in source code (not the built image). Full Jenkins Quality Gate wiring: [`../06-devsecops-security/sonarqube-sast.md`](../06-devsecops-security/sonarqube-sast.md). Official docs: https://docs.sonarsource.com/sonarqube-server/latest/
