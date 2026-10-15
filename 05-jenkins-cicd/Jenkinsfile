@@ -10,6 +10,7 @@ pipeline {
         IMAGE_TAG  = "v1"
         REPO_URL   = "https://github.com/yatin73/amazonclone.git"
         SONAR_HOST = "http://host.docker.internal:9000"
+        ECR_REPO   = "public.ecr.aws/u2v8m6a3/amazon-clone-yatin"
     }
 
     stages {
@@ -72,6 +73,22 @@ pipeline {
                     if (status != 0) {
                         error("Trivy found HIGH/CRITICAL vulnerabilities - see Trivy Scan Report")
                     }
+                }
+            }
+        }
+
+        stage('Push to AWS ECR') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
+                ]) {
+                    sh '''
+                        aws ecr-public get-login-password --region us-east-1 \
+                          | docker login --username AWS --password-stdin public.ecr.aws
+                        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${ECR_REPO}:${IMAGE_TAG}
+                        docker push ${ECR_REPO}:${IMAGE_TAG}
+                    '''
                 }
             }
         }

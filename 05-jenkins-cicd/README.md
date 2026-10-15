@@ -176,13 +176,24 @@ RUN apt-get update && apt-get install -y ca-certificates curl gnupg lsb-release 
     apt-get update && apt-get install -y docker-ce-cli && \
     rm -rf /var/lib/apt/lists/*
 
+# Install AWS CLI v2 (arch-aware) so pipelines can authenticate and push to ECR.
+RUN apt-get update && apt-get install -y unzip && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then AWSCLI_ARCH=aarch64; else AWSCLI_ARCH=x86_64; fi && \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o /tmp/awscliv2.zip && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && \
+    /tmp/aws/install && \
+    rm -rf /tmp/awscliv2.zip /tmp/aws && \
+    rm -rf /var/lib/apt/lists/*
+
 USER jenkins
 ```
 
 Line by line:
 - `FROM jenkins/jenkins:lts` — official Jenkins LTS (Debian-based), includes Java + Jenkins + web UI on port 8080.
 - `USER root` — switch to root temporarily; installing system packages requires it.
-- The `apt-get`/`curl`/`echo` block — Docker's official apt-repo setup process (same pattern as installing Docker on a Debian/Ubuntu host), but installing **only** `docker-ce-cli` (the command-line tool), not the full Engine — we don't need a second Docker daemon running inside this container.
+- The first `apt-get`/`curl`/`echo` block — Docker's official apt-repo setup process (same pattern as installing Docker on a Debian/Ubuntu host), but installing **only** `docker-ce-cli` (the command-line tool), not the full Engine — we don't need a second Docker daemon running inside this container.
+- The second `RUN` block — installs **AWS CLI v2**, detecting the container's CPU architecture (`arm64` vs `x86_64`) so this works unmodified on both Apple Silicon and Intel/standard Linux hosts — needed for the ECR push stage later.
 - `USER jenkins` — switch back to the unprivileged `jenkins` user before Jenkins actually starts (security best practice).
 
 Build it (same command on every OS):
@@ -260,14 +271,22 @@ git push -u origin main
 - Scroll to **Pipeline** → Definition: **Pipeline script** → paste the script from Section 7.11 below
 - Save
 
-### 7.10 Store the SonarQube token as a Jenkins credential
+### 7.10 Store required secrets as Jenkins credentials
 
-Rather than hardcoding the token in the Jenkinsfile:
-- **Manage Jenkins** → **Credentials** → **(global)** → **Add Credentials**
-- Kind: **Secret text**, Secret: your SonarQube token, ID: `sonar-token`
-- Create
+Rather than hardcoding any secret in the Jenkinsfile, every credential below is referenced by ID via `withCredentials` in the pipeline script. **Manage Jenkins** → **Credentials** → **(global)** → **Add Credentials**, repeated for each row:
 
-### 7.11 Full Jenkinsfile: Checkout → SonarQube Scan → Docker Build → Trivy Scan (with HTML report)
+| Kind | ID | Secret value | Used for |
+|---|---|---|---|
+| Secret text | `sonar-token` | Your SonarQube project token (My Account → Security → Generate Token in the SonarQube UI) | Authenticating the SonarQube Scan stage |
+| Secret text | `aws-access-key-id` | IAM access key ID | Authenticating `aws ecr-public get-login-password` |
+| Secret text | `aws-secret-access-key` | IAM secret access key | Authenticating `aws ecr-public get-login-password` |
+
+**Creating the AWS IAM user for the last two credentials:**
+- AWS Console → **IAM** → **Users** → **Create user** (e.g. `jenkins-ecr-push`)
+- Attach the AWS-managed policy **`AmazonElasticContainerRegistryPublicPowerUser`** (sufficient for pushing to a Public ECR repo; use a narrower custom policy for anything beyond a lab)
+- Security credentials tab → **Create access key** → choose **Application running outside AWS** → copy the **Access Key ID** and **Secret Access Key** into the two credentials above
+
+### 7.11 Full Jenkinsfile: Checkout → SonarQube Scan → Docker Build → Trivy Scan (HTML report) → Push to AWS ECR
 
 ```groovy
 pipeline {
@@ -282,6 +301,7 @@ pipeline {
         IMAGE_TAG  = "v1"
         REPO_URL   = "https://github.com/<your-github-username>/AmazonClone.git"
         SONAR_HOST = "http://host.docker.internal:9000"
+        ECR_REPO   = "public.ecr.aws/<your-public-ecr-alias>/<your-repo-name>"
     }
 
     stages {
@@ -347,6 +367,22 @@ pipeline {
                 }
             }
         }
+
+        stage('Push to AWS ECR') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
+                ]) {
+                    sh '''
+                        aws ecr-public get-login-password --region us-east-1 \
+                          | docker login --username AWS --password-stdin public.ecr.aws
+                        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${ECR_REPO}:${IMAGE_TAG}
+                        docker push ${ECR_REPO}:${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
     }
 }
 ```
@@ -355,6 +391,8 @@ pipeline {
 - Every scan tool (`sonar-scanner-cli`, `trivy`) runs as a **throwaway sibling container** (`docker run --rm ...`) via the shared socket, instead of being permanently installed inside the Jenkins image — this avoids CPU architecture headaches (e.g. Apple Silicon Macs) since Docker pulls the correct image variant automatically.
 - `host.docker.internal` is Docker Desktop's built-in DNS name letting any container reach services on the host machine (here, the `sonarqube` container published on port 9000). **On native Linux Docker Engine**, this hostname isn't resolved by default — add `--add-host=host.docker.internal:host-gateway` to the relevant `docker run` commands, or replace it with the host's actual IP.
 - The scanner/Trivy containers mount the **named volume** `jenkins_home` (not a bind-mount path) — see the pitfall explanation in 7.13.
+- `aws ecr-public get-login-password` **must** use `--region us-east-1` — the Public ECR API only exists in that region, regardless of where you or your other AWS resources are located; this has no effect on where the pushed image is actually served from (Public ECR distributes globally via CloudFront).
+- The **Push to AWS ECR** stage only runs if **Trivy Scan** didn't call `error(...)` first — Jenkins stops the pipeline there on a failed scan, so a vulnerable image never gets pushed.
 
 ### 7.12 Install the HTML Publisher plugin + fix report rendering
 
@@ -390,6 +428,8 @@ Any `docker run -v <path>:<container-path>` executed **from inside Jenkins** act
 - **Adding a new volume mount (e.g. the Docker socket) to an already-running container does nothing**: Docker doesn't support attaching new mounts to a live container — you must `docker stop`/`docker rm` and `docker run` again (the named `jenkins_home` volume ensures no data is lost across this).
 - **`publishHTML` not recognized**: plugin not installed, or Jenkins wasn't restarted after installing it.
 - **Published HTML report shows blank**: Jenkins' default Content-Security-Policy blocks inline `<script>`/`<style>` — clear it via the Script Console command in Section 7.12.
+- **`aws: command not found` inside the pipeline**: the custom image hasn't been rebuilt since adding the AWS CLI install step (Section 7.4) — rebuild `jenkins-docker:lts` and recreate the container.
+- **ECR push fails with an auth/region error**: double check `aws ecr-public get-login-password` uses `--region us-east-1` specifically — this is required for Public ECR even if your other AWS credentials/resources are in a different region.
 
 ## Common issues
 
