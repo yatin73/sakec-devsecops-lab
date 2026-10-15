@@ -1,54 +1,79 @@
-// Declarative Jenkins pipeline for the SAKEC DevSecOps sample app.
-// Checkout -> Docker build -> (Day 6) scan -> redeploy container on the same EC2 host.
 pipeline {
     agent any
 
+    parameters {
+        string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
+    }
+
     environment {
-        IMAGE_NAME = "sakec-devsecops-app"
-        IMAGE_TAG  = "${env.BUILD_NUMBER}"
-        CONTAINER_NAME = "devsecops-app"
-        APP_DIR = "03-sample-app-deployment-ec2/app"
+        IMAGE_NAME = "amazonclone"
+        IMAGE_TAG  = "v1"
+        REPO_URL   = "https://github.com/yatin73/amazonclone.git"
+        SONAR_HOST = "http://host.docker.internal:9000"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                git branch: "${params.BRANCH}", url: "${REPO_URL}"
+            }
+        }
+
+        stage('SonarQube Scan') {
+            steps {
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    sh '''
+                        WORKSPACE_REL=$(echo "$WORKSPACE" | sed 's|^/var/jenkins_home/||')
+                        docker run --rm \
+                          -e SONAR_HOST_URL=${SONAR_HOST} \
+                          -e SONAR_TOKEN=${SONAR_TOKEN} \
+                          -v jenkins_home:/usr/src \
+                          sonarsource/sonar-scanner-cli \
+                          -Dsonar.projectKey=amazonclone \
+                          -Dsonar.sources=/usr/src/${WORKSPACE_REL}/src
+                    '''
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                dir("${APP_DIR}") {
-                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -t ${IMAGE_NAME}:latest ."
+                sh 'docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .'
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                script {
+                    def status = sh(returnStatus: true, script: '''
+                        WORKSPACE_REL=$(echo "$WORKSPACE" | sed 's|^/var/jenkins_home/||')
+                        curl -fsSL -o $WORKSPACE/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+                        docker run --rm \
+                          -v /var/run/docker.sock:/var/run/docker.sock \
+                          -v jenkins_home:/usr/src \
+                          aquasec/trivy image \
+                          --severity HIGH,CRITICAL \
+                          --exit-code 1 \
+                          --format template \
+                          --template "@/usr/src/${WORKSPACE_REL}/html.tpl" \
+                          -o /usr/src/${WORKSPACE_REL}/trivy-report.html \
+                          ${IMAGE_NAME}:${IMAGE_TAG}
+                    ''')
+
+                    publishHTML(target: [
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: '.',
+                        reportFiles: 'trivy-report.html',
+                        reportName: 'Trivy Scan Report'
+                    ])
+
+                    if (status != 0) {
+                        error("Trivy found HIGH/CRITICAL vulnerabilities - see Trivy Scan Report")
+                    }
                 }
             }
-        }
-
-        stage('Security Scan') {
-            steps {
-                // See 06-devsecops-security/README.md to wire up Trivy here.
-                sh "echo 'TODO: trivy image ${IMAGE_NAME}:${IMAGE_TAG} -- see 06-devsecops-security'"
-            }
-        }
-
-        stage('Deploy') {
-            steps {
-                sh """
-                    docker stop ${CONTAINER_NAME} || true
-                    docker rm ${CONTAINER_NAME} || true
-                    docker run -d --name ${CONTAINER_NAME} -p 5000:5000 ${IMAGE_NAME}:latest
-                """
-            }
-        }
-    }
-
-    post {
-        success {
-            echo "Deployed ${IMAGE_NAME}:${IMAGE_TAG} successfully."
-        }
-        failure {
-            echo "Pipeline failed - check stage logs above."
         }
     }
 }
